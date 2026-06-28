@@ -1,0 +1,41 @@
+{
+  "Hips": [
+    "left_hip",
+    "right_hip",
+    "center_of_mass"
+  ],
+  "Spine": [
+    "Hips",
+    "Chest"
+  ],
+  "Chest": [
+    "left_shoulder",
+    "right_shoulder"
+  ],
+  "Neck": [
+    "neck_center",
+    "chest",
+    "nose"
+  ],
+  "Head": [
+    "nose",
+    "left_eye",
+    "right_eye",
+    "left_ear",
+    "right_ear"
+  ],
+  "LeftHandEnd": [
+    "left_hand middle/index/ring/pinky/thumb tips",
+    "left_index"
+  ],
+  "RightHandEnd": [
+    "right_hand middle/index/ring/pinky/thumb tips",
+    "right_index"
+  ],
+  "LeftToe": [
+    "left_foot_index"
+  ],
+  "RightToe": [
+    "right_foot_index"
+  ]
+}
