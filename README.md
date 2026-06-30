@@ -1,146 +1,144 @@
 # CSVtoBVH
 
-FreeMoCap / MediaPipe のランドマークデータを BVH に変換する Python スクリプトです。
+FreeMoCap / MediaPipe のランドマークデータ（NumPy / CSV）を、BlenderやMixamo系リグで扱えるBVHへ変換するツールです。
 
-主に `freemocap_to_bvh_plus.py` を使います。体・手・顔・重心データを読み込み、Mixamo 形式に近いボーン名の BVH を出力できます。`body_landmarks_to_bvh.py` は体 33 点だけを使う簡易版です。
+主に `freemocap_to_bvh_plus.py` を使用します。`body_landmarks_to_bvh.py` はMediaPipe Body 33点だけを扱う簡易版です。
 
 ## 必要環境
 
-- Python 3
+- Python 3.9以降
 - NumPy
 
-NumPy が入っていない場合:
-
 ```bash
-python3 -m pip install numpy
+python -m pip install numpy
 ```
 
-## 入力ファイル
+## 入力
 
-既定では `input/` 以下から存在するファイルを自動で読み込みます。
+引数を省略した場合は、`input/` から次の名前を自動検出します。
 
-| 種類 | 既定で探すファイル |
+| データ | 主なファイル名 |
 | --- | --- |
-| 体 | `input/all_frame_name_xyz.csv`, `input/all_frame_name_xyz.npy`, `input/body_frame_name_xyz.npy`, `input/mediapipe_body_3d_xyz.csv`, `input/body_trajectories.csv` |
-| 左手 | `input/left_hand_frame_name_xyz.csv`, `input/left_hand_frame_name_xyz.npy` |
-| 右手 | `input/right_hand_frame_name_xyz.csv`, `input/right_hand_frame_name_xyz.npy` |
-| 顔 | `input/face_frame_name_xyz.csv` |
-| 重心 | `input/center_of_mass_frame_name_xyz.csv`, `input/center_of_mass_frame_name_xyz.npy` |
+| 身体 | `all_frame_name_xyz.npy`, `body_frame_name_xyz.npy` |
+| 左手 | `left_hand_frame_name_xyz.npy` |
+| 右手 | `right_hand_frame_name_xyz.npy` |
+| 顔 | `face_frame_name_xyz.npy` |
+| 重心 | `center_of_mass_frame_name_xyz.npy` |
 
-`.npy` は基本的に `frames x landmarks x 3` の形を想定します。重心データは `frames x 3` も読み込めます。
+NPYの基本形状は `frames x landmarks x 3` です。重心は `frames x 3` にも対応します。
 
-CSV は次のどちらかの形式に対応しています。
+CSVは以下の形式に対応します。
 
-- `frame`, `name`, `x`, `y`, `z` のように、1 行が 1 ランドマークになっている形式
-- `left_shoulder_x`, `left_shoulder_y`, `left_shoulder_z` のように、座標軸が列名に入っている形式
+- `frame, name, x, y, z` のように1行が1ランドマーク
+- `left_shoulder_x` のように列名へランドマーク名と軸を含むワイド形式
+
+入力データや生成BVHはGitへ追加されない設定です。
 
 ## 基本的な使い方
 
-`input/` に既定名のファイルがある場合:
+既定名のファイルを `input/` に置いた場合:
 
 ```bash
-python3 freemocap_to_bvh_plus.py
+python freemocap_to_bvh_plus.py
 ```
 
-出力先は既定で `output/output_plus.bvh` です。
-
-出力先を指定する場合:
+ファイルを明示する場合:
 
 ```bash
-python3 freemocap_to_bvh_plus.py --output output/freemocap_mixamo.bvh
-```
-
-入力ファイルを明示する場合:
-
-```bash
-python3 freemocap_to_bvh_plus.py \
+python freemocap_to_bvh_plus.py \
   --body input/all_frame_name_xyz.npy \
   --left-hand input/left_hand_frame_name_xyz.npy \
   --right-hand input/right_hand_frame_name_xyz.npy \
   --com input/center_of_mass_frame_name_xyz.npy \
-  --output output/freemocap_mixamo.bvh
+  --output output/motion.bvh
 ```
 
-## よく使うオプション
+Windows PowerShellでは、継続記号として `\` ではなくバッククォートを使うか、1行で実行してください。
+
+## 主なオプション
 
 | オプション | 説明 |
 | --- | --- |
-| `--rig-preset mixamo` | Mixamo 風の階層で出力します。既定値です。 |
-| `--rig-preset simple` | シンプルな BVH 階層で出力します。 |
-| `--mixamo-prefix mixamorig:` | Mixamo 出力時のボーン名 prefix です。既定値は `mixamorig:`。 |
-| `--rest-pose data` | 入力データの平均姿勢を rest pose に使います。既定値です。 |
-| `--rest-pose tpose` | 計測した骨長から T ポーズ風の rest pose を作ります。 |
-| `--prepend-tpose` | モーション先頭に T ポーズフレームを追加します。 |
-| `--fps 30` | BVH の FPS を指定します。 |
-| `--scale 0.001` | 入力が mm 単位の場合など、座標スケールを変えます。 |
-| `--smooth 5` | 体ランドマークの移動平均窓です。`1` で無効化します。 |
-| `--root-smooth 9` | 重心・腰まわりの移動平均窓です。 |
-| `--hand-smooth 5` | 手ランドマークの移動平均窓です。 |
-| `--face-smooth 5` | 顔ランドマークの移動平均窓です。 |
-| `--no-swap-yz` | 既定の Y/Z 入れ替えを無効化します。 |
-| `--flip-x`, `--flip-y`, `--flip-z` | 各軸を反転します。横倒し・鏡反転する場合に試します。 |
-| `--rotate-x`, `--rotate-y`, `--rotate-z` | 入力点全体を度数法で回転します。 |
-| `--debug-summary` | 読み込んだランドマーク概要を表示します。 |
-| `--dump-joint-map output/joint_map.json` | BVH 関節と入力ランドマークの対応メモを書き出します。 |
-| `--preview-first-frame output/preview.obj` | 先頭フレームの骨格プレビュー OBJ を書き出します。 |
+| `--rig-preset mixamo` | Mixamo風の階層・ボーン名で出力（既定） |
+| `--rig-preset simple` | シンプルな階層で出力 |
+| `--mixamo-prefix mixamorig:` | Mixamoボーン名の接頭辞 |
+| `--rest-pose data` | 入力データの平均姿勢をレスト姿勢に使用（既定） |
+| `--rest-pose tpose` | 計測した骨長からTポーズを生成 |
+| `--rest-start N` | レスト姿勢の平均を開始する入力フレーム |
+| `--rest-frames N` | レスト姿勢の平均に使うフレーム数 |
+| `--start-frame N` | Nより前の入力フレームを読み飛ばす |
+| `--fps 30` | BVHのフレームレート |
+| `--scale 0.001` | 入力座標の倍率 |
+| `--smooth N` | 身体ランドマークの平滑化窓。`1`で無効 |
+| `--root-smooth N` | 腰・重心の平滑化窓 |
+| `--hand-smooth N` | 手の平滑化窓 |
+| `--face-smooth N` | 顔の平滑化窓 |
+| `--use-hand-rotation` | 手ランドマークから手首方向を計算 |
+| `--head-rotation-weight 0.0` | 顔から求める頭部回転の反映率 |
+| `--joint-limit-mode soft` | 手首・足首の過回転を滑らかに制限 |
+| `--debug-summary` | 読み込んだランドマークの概要を表示 |
+| `--dump-joint-map PATH` | 関節対応表をJSON出力 |
+| `--preview-first-frame PATH` | 最初の骨格をOBJ出力 |
 
-例:
-
-```bash
-python3 freemocap_to_bvh_plus.py \
-  --output output/freemocap_mixamo.bvh \
-  --rest-pose tpose \
-  --prepend-tpose \
-  --debug-summary \
-  --dump-joint-map output/joint_map.json \
-  --preview-first-frame output/preview.obj
-```
-
-## 向きがおかしい場合
-
-BVH が横倒し、前後逆、左右反転になる場合は、次を順番に試してください。
+すべての引数:
 
 ```bash
-python3 freemocap_to_bvh_plus.py --no-swap-yz
-python3 freemocap_to_bvh_plus.py --flip-x
-python3 freemocap_to_bvh_plus.py --flip-y
-python3 freemocap_to_bvh_plus.py --flip-z
-python3 freemocap_to_bvh_plus.py --rotate-x 90
+python freemocap_to_bvh_plus.py --help
 ```
 
-複数の補正を組み合わせることもできます。
+## Blenderへの読み込み
 
-## 簡易版 `body_landmarks_to_bvh.py`
+現在の既定出力をBlenderへ読み込む際は、BVHインポート設定を以下にします。
 
-`body_landmarks_to_bvh.py` は MediaPipe body landmark の先頭 33 点だけを使う簡易コンバーターです。手・顔・重心の別ファイルは読みません。
+- Forward: `-Z Forward`
+- Up: `-Y Up`
+
+この向きは、開発時に確認したBlender 4.5のリターゲット構成に合わせています。別のリグや座標系で向きが合わない場合は、次の変換オプションを使用できます。
 
 ```bash
-python3 body_landmarks_to_bvh.py input/body_frame_name_xyz.npy output/simple.bvh
+python freemocap_to_bvh_plus.py --no-swap-yz
+python freemocap_to_bvh_plus.py --flip-x
+python freemocap_to_bvh_plus.py --flip-y
+python freemocap_to_bvh_plus.py --flip-z
+python freemocap_to_bvh_plus.py --rotate-x 90
+python freemocap_to_bvh_plus.py --no-blender-retarget-compatible
 ```
 
-主なオプション:
+## 簡易コンバーター
+
+身体33点だけを変換する場合:
 
 ```bash
-python3 body_landmarks_to_bvh.py --help
+python body_landmarks_to_bvh.py input/body_frame_name_xyz.npy output/simple.bvh
 ```
 
-## Blender 用スクリプト
+## Blender補助スクリプト
 
-`BlenderScript/retarget_left_hand_ik.py` は、Blender 上で BVH 側アーマチュアの左手モーションをターゲットアーマチュアへ IK で移す補助スクリプトです。
+`BlenderScript/` にはBlenderのScriptingワークスペースで実行する補助スクリプトがあります。
 
-使用前にスクリプト冒頭の名前を Blender シーンに合わせて変更してください。
+| ファイル | 用途 |
+| --- | --- |
+| `retarget_bvh_with_rest_correction.py` | レスト姿勢・ボーンロール差を補正してリターゲット |
+| `retarget_legs_ik.py` | 脚をIKで補助リターゲット |
+| `debug/inspect_active_rig.py` | 選択リグの構造をレポート |
+| `debug/inspect_shoulder_retarget.py` | 腕・肩の回転問題を解析 |
+| `legacy/retarget_left_hand_ik.py` | 旧・左腕IK検証用（通常は不使用） |
 
-- `SOURCE_ARMATURE_NAME`
-- `TARGET_ARMATURE_NAME`
-- `SRC_LEFT_ARM`, `SRC_LEFT_FOREARM`, `SRC_LEFT_HAND`
-- `TGT_LEFT_ARM`, `TGT_LEFT_FOREARM`, `TGT_LEFT_HAND`
+スクリプト冒頭のソース／ターゲット名を、Blenderシーン内のオブジェクト名に合わせてください。`debug/` は問題解析用ですが、将来のリグ差調査に使えるため残しています。
 
-BVH を Blender に読み込んだ後、対象アバターも同じシーンに置いてから実行します。肘の曲がりが逆になる場合は `LEFT_ARM_POLE_ANGLE` を `math.radians(90)`, `math.radians(-90)`, `math.radians(180)` などに変更して確認してください。
+## ディレクトリ
 
-## 出力
+```text
+CSVtoBVH/
+├── freemocap_to_bvh_plus.py
+├── body_landmarks_to_bvh.py
+├── BlenderScript/
+│   ├── retarget_bvh_with_rest_correction.py
+│   ├── retarget_legs_ik.py
+│   ├── debug/
+│   └── legacy/
+├── input/
+└── output/
+```
 
-- BVH: `output/output_plus.bvh` など
-- 関節対応表: `--dump-joint-map` 指定時の JSON
-- 先頭フレームのプレビュー: `--preview-first-frame` 指定時の OBJ
-
-生成済みの `output/` は実行結果の例です。必要に応じて上書きしてください。
+`input/`、`output/`、Blenderの解析レポートには個人の計測データや生成物が入るため、`.gitignore` で除外しています。

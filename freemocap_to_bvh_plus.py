@@ -139,12 +139,16 @@ PARENTS_MIXAMO = {
     "RightForeArm": "RightArm",
     "RightHand": "RightForeArm",
 
-    "LeftUpLeg": "Hips",
+    # Blender places a BVH bone tail at the average of all child joint
+    # positions. Keeping the legs under this helper prevents their opposing
+    # offsets from collapsing the Hips bone to almost zero length.
+    "Pelvis": "Hips",
+    "LeftUpLeg": "Pelvis",
     "LeftLeg": "LeftUpLeg",
     "LeftFoot": "LeftLeg",
     "LeftToeBase": "LeftFoot",
 
-    "RightUpLeg": "Hips",
+    "RightUpLeg": "Pelvis",
     "RightLeg": "RightUpLeg",
     "RightFoot": "RightLeg",
     "RightToeBase": "RightFoot",
@@ -477,6 +481,14 @@ def rotate_frames(frames, x_degrees=0.0, y_degrees=0.0, z_degrees=0.0):
     return [{name: r @ point for name, point in frame.items()} for frame in frames]
 
 
+def invert_all_axes(frames):
+    """Bake Blender retargeter's target -X/-Y/-Z convention into the BVH data."""
+    return [
+        {name: -np.asarray(point, dtype=float) for name, point in frame.items()}
+        for frame in frames
+    ]
+
+
 def frame_keys(frames):
     keys = set()
     for frame in frames:
@@ -583,6 +595,8 @@ def build_intermediate_positions(frame, com_blend=0.75):
     spine_mixamo = hips_center * 0.75 + chest * 0.25
     spine1_mixamo = hips_center * 0.50 + chest * 0.50
     spine2_mixamo = hips_center * 0.20 + chest * 0.80
+    left_shoulder_root = chest + (left_shoulder - chest) * (1.0 / 3.0)
+    right_shoulder_root = chest + (right_shoulder - chest) * (1.0 / 3.0)
 
     nose = point(frame, ["nose", "face_nose"], chest + np.array([0.0, 0.2, 0.0]))
     neck = point(frame, ["neck_center"], chest * 0.75 + nose * 0.25)
@@ -608,6 +622,9 @@ def build_intermediate_positions(frame, com_blend=0.75):
 
     positions = {
         "Hips": hips,
+        # Overlap Pelvis with the first spine joint. Hips therefore points up
+        # like a Mixamo hips bone while Pelvis carries both leg branches.
+        "Pelvis": spine_mixamo,
         "Spine": spine_mixamo,
         "Spine1": spine1_mixamo,
         "Spine2": spine2_mixamo,
@@ -615,16 +632,16 @@ def build_intermediate_positions(frame, com_blend=0.75):
         "Neck": neck,
         "Head": head,
 
-        "LeftShoulder": left_shoulder,
-        "LeftArm": point(frame, ["left_elbow"]),
-        "LeftForeArm": left_wrist,
-        "LeftHand": left_hand,
+        "LeftShoulder": left_shoulder_root,
+        "LeftArm": left_shoulder,
+        "LeftForeArm": point(frame, ["left_elbow"]),
+        "LeftHand": left_wrist,
         "LeftHandEnd": left_hand_end,
 
-        "RightShoulder": right_shoulder,
-        "RightArm": point(frame, ["right_elbow"]),
-        "RightForeArm": right_wrist,
-        "RightHand": right_hand,
+        "RightShoulder": right_shoulder_root,
+        "RightArm": right_shoulder,
+        "RightForeArm": point(frame, ["right_elbow"]),
+        "RightHand": right_wrist,
         "RightHandEnd": right_hand_end,
 
         "LeftUpLeg": left_hip,
@@ -753,6 +770,40 @@ def compute_tpose_offsets(measured_offsets):
     return offsets
 
 
+def match_inspected_mixamo_arm_lengths(offsets):
+    """Match the arm bone proportions of the inspected target Mixamo rig."""
+    out = {joint: value.copy() for joint, value in offsets.items()}
+
+    leg_lengths = []
+    for side in ("Left", "Right"):
+        upper = out.get(f"{side}Leg")
+        lower = out.get(f"{side}Foot")
+        if upper is not None and lower is not None:
+            leg_lengths.append(np.linalg.norm(upper) + np.linalg.norm(lower))
+    if not leg_lengths:
+        return out
+    leg_length = float(np.mean(leg_lengths))
+
+    # An OFFSET belongs to the child joint but visually determines the length
+    # of its parent bone after Blender imports the BVH.
+    child_length_ratios = {
+        "Arm": 0.205,       # Shoulder bone
+        "ForeArm": 0.048,   # Arm bone
+        "Hand": 0.268,      # ForeArm bone
+    }
+    for side in ("Left", "Right"):
+        for child_suffix, ratio in child_length_ratios.items():
+            joint = f"{side}{child_suffix}"
+            vector = out.get(joint)
+            if vector is None:
+                continue
+            length = np.linalg.norm(vector)
+            if length > 1.0e-8:
+                out[joint] = vector / length * (leg_length * ratio)
+
+    return out
+
+
 def compute_rest_positions(all_positions, rest_start=0, rest_frames=30):
     n_frames = len(all_positions)
     a = max(0, rest_start)
@@ -863,7 +914,7 @@ def compute_world_rotations(positions, offsets, rest_positions, use_torso_frame=
     current_torso = torso_basis(positions)
 
     for joint in CHANNEL_JOINTS:
-        if use_torso_frame and joint in {"Hips", "Spine", "Spine1", "Spine2", "Chest"}:
+        if use_torso_frame and joint in {"Hips", "Pelvis", "Spine", "Spine1", "Spine2", "Chest"}:
             world_rot[joint] = rotation_from_bases(rest_torso, current_torso)
             continue
 
@@ -879,13 +930,20 @@ def compute_world_rotations(positions, offsets, rest_positions, use_torso_frame=
             world_rot[joint] = rotation_from_bases(rest_head, current_head)
             continue
 
-        if use_hand_rotation and joint in {"LeftForeArm", "RightForeArm"}:
+        if use_hand_rotation and joint in {"LeftHand", "RightHand"}:
             side = "left" if joint.startswith("Left") else "right"
             rest_hand = hand_basis(rest_positions, side)
             current_hand = hand_basis(positions, side)
             if rest_hand is not None and current_hand is not None:
                 world_rot[joint] = rotation_from_bases(rest_hand, current_hand)
                 continue
+
+        if joint in {"LeftHand", "RightHand"}:
+            end_name = f"{joint}End"
+            rest_vec = rest_positions[end_name] - rest_positions[joint]
+            current_vec = positions[end_name] - positions[joint]
+            world_rot[joint] = rotation_matrix_from_vectors(rest_vec, current_vec)
+            continue
 
         if joint in {"LeftFoot", "RightFoot"}:
             side = "left" if joint.startswith("Left") else "right"
@@ -936,7 +994,7 @@ def format_vec(v):
     return f"{v[0]:.6f} {v[1]:.6f} {v[2]:.6f}"
 
 
-def compute_end_site_offsets(offsets, scale=0.25):
+def compute_end_site_offsets(offsets, rest_positions=None, scale=0.25):
     end_offsets = {}
     for joint in PARENTS:
         if CHILDREN[joint]:
@@ -944,6 +1002,15 @@ def compute_end_site_offsets(offsets, scale=0.25):
         parent_offset = offsets[joint]
         if np.linalg.norm(parent_offset) < 1e-8:
             end_offsets[joint] = np.array([0.0, 0.0, 0.0])
+        elif (
+            rest_positions is not None
+            and joint in {"LeftHand", "RightHand"}
+            and rest_positions.get(f"{joint}End") is not None
+        ):
+            end_offsets[joint] = rest_positions[f"{joint}End"] - rest_positions[joint]
+        elif joint == "Head":
+            # Match the inspected Mixamo rig's head-to-leg proportion.
+            end_offsets[joint] = parent_offset * 1.3
         else:
             end_offsets[joint] = parent_offset * scale
     return end_offsets
@@ -989,13 +1056,33 @@ def limit_euler_delta(current, previous, max_delta):
     return limited
 
 
-def output_joint_name(joint, prefix=""):
-    return f"{prefix}{joint}"
+def swap_left_right_name(name):
+    if name.startswith("Left"):
+        return f"Right{name[len('Left'):]}"
+    if name.startswith("Right"):
+        return f"Left{name[len('Right'):]}"
+    return name
 
 
-def write_joint_hierarchy(lines, joint, offsets, end_offsets, indent=0, output_prefix=""):
+def output_joint_name(joint, prefix="", swap_left_right=False):
+    output_name = swap_left_right_name(joint) if swap_left_right else joint
+    return f"{prefix}{output_name}"
+
+
+def write_joint_hierarchy(
+    lines,
+    joint,
+    offsets,
+    end_offsets,
+    indent=0,
+    output_prefix="",
+    swap_left_right=False,
+):
     sp = "  " * indent
-    lines.append(f"{sp}{'ROOT' if joint == 'Hips' else 'JOINT'} {output_joint_name(joint, output_prefix)}")
+    lines.append(
+        f"{sp}{'ROOT' if joint == 'Hips' else 'JOINT'} "
+        f"{output_joint_name(joint, output_prefix, swap_left_right)}"
+    )
     lines.append(f"{sp}{{")
     lines.append(f"{sp}  OFFSET {format_vec(offsets[joint])}")
 
@@ -1005,7 +1092,15 @@ def write_joint_hierarchy(lines, joint, offsets, end_offsets, indent=0, output_p
         lines.append(f"{sp}  CHANNELS 3 Zrotation Xrotation Yrotation")
 
     for child in CHILDREN[joint]:
-        write_joint_hierarchy(lines, child, offsets, end_offsets, indent + 1, output_prefix=output_prefix)
+        write_joint_hierarchy(
+            lines,
+            child,
+            offsets,
+            end_offsets,
+            indent + 1,
+            output_prefix=output_prefix,
+            swap_left_right=swap_left_right,
+        )
 
     if not CHILDREN[joint]:
         lines.append(f"{sp}  End Site")
@@ -1033,13 +1128,21 @@ def write_bvh(
     output_prefix="",
     prepend_tpose=False,
     tpose_frames=30,
+    swap_left_right=False,
 ):
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    end_offsets = compute_end_site_offsets(offsets)
+    end_offsets = compute_end_site_offsets(offsets, rest_positions=rest_positions)
 
     lines = ["HIERARCHY"]
-    write_joint_hierarchy(lines, "Hips", offsets, end_offsets, output_prefix=output_prefix)
+    write_joint_hierarchy(
+        lines,
+        "Hips",
+        offsets,
+        end_offsets,
+        output_prefix=output_prefix,
+        swap_left_right=swap_left_right,
+    )
 
     frame_time = 1.0 / fps
     lines.append("MOTION")
@@ -1134,6 +1237,7 @@ def write_bvh(
 def write_joint_map(path):
     mapping = {
         "Hips": ["left_hip", "right_hip", "center_of_mass"],
+        "Pelvis": ["Hips helper used to keep Blender's BVH Hips bone from collapsing"],
         "Spine": ["Hips", "Chest"],
         "Chest": ["left_shoulder", "right_shoulder"],
         "Neck": ["neck_center", "chest", "nose"],
@@ -1207,10 +1311,13 @@ def main():
     parser.add_argument("--rig-preset", choices=["simple", "mixamo"], default="mixamo")
     parser.add_argument("--mixamo-prefix", default="mixamorig:")
     parser.add_argument("--rest-pose", choices=["data", "tpose"], default="data")
+    parser.add_argument("--rest-start", type=int, default=0, help="First input frame used to calculate the rest pose.")
+    parser.add_argument("--rest-frames", type=int, default=30, help="Number of input frames averaged for the rest pose.")
     parser.add_argument("--prepend-tpose", action="store_true")
     parser.add_argument("--tpose-frames", type=int, default=30)
 
     parser.add_argument("--fps", type=float, default=30.0)
+    parser.add_argument("--start-frame", type=int, default=0, help="Discard input frames before this zero-based frame index.")
     parser.add_argument("--scale", type=float, default=1.0)
     parser.add_argument("--smooth", type=int, default=5)
     parser.add_argument("--root-smooth", type=int, default=9)
@@ -1226,6 +1333,20 @@ def main():
     parser.add_argument("--rotate-x", type=float, default=0.0)
     parser.add_argument("--rotate-y", type=float, default=0.0)
     parser.add_argument("--rotate-z", type=float, default=0.0)
+    parser.add_argument(
+        "--blender-retarget-compatible",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Bake the observed Blender target -X/-Y/-Z axes into the BVH "
+            "(enabled by default)."
+        ),
+    )
+    parser.add_argument(
+        "--swap-left-right-bones",
+        action="store_true",
+        help="Exchange Left/Right output bone names; normally this is not needed.",
+    )
 
     parser.add_argument("--use-torso-frame", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--use-hand-rotation", action="store_true")
@@ -1262,6 +1383,12 @@ def main():
     if not frames:
         raise FileNotFoundError("No input landmark data was loaded. Use --body or another input path.")
 
+    if args.start_frame < 0:
+        parser.error("--start-frame must be 0 or greater")
+    if args.start_frame >= len(frames):
+        parser.error(f"--start-frame must be less than the input frame count ({len(frames)})")
+    frames = frames[args.start_frame:]
+
     frames = convert_coordinate_system(
         frames,
         scale=args.scale,
@@ -1271,6 +1398,8 @@ def main():
         flip_z=args.flip_z,
     )
     frames = rotate_frames(frames, args.rotate_x, args.rotate_y, args.rotate_z)
+    if args.blender_retarget_compatible:
+        frames = invert_all_axes(frames)
 
     all_keys = frame_keys(frames)
     hand_keys = {k for k in all_keys if k.startswith("left_hand_") or k.startswith("right_hand_")}
@@ -1290,9 +1419,26 @@ def main():
     for frame in frames:
         all_positions.append(build_intermediate_positions(frame, com_blend=args.com_blend))
 
-    measured_offsets = compute_offsets(all_positions)
+    if args.rest_start < 0:
+        parser.error("--rest-start must be 0 or greater")
+    if args.rest_frames < 1:
+        parser.error("--rest-frames must be 1 or greater")
+    if args.rest_start >= len(all_positions):
+        parser.error(f"--rest-start must be less than the input frame count ({len(all_positions)})")
+
+    measured_offsets = compute_offsets(
+        all_positions,
+        rest_start=args.rest_start,
+        rest_frames=args.rest_frames,
+    )
     offsets = compute_tpose_offsets(measured_offsets) if args.rest_pose == "tpose" else measured_offsets
-    rest_positions = compute_rest_positions(all_positions)
+    if args.rig_preset == "mixamo":
+        offsets = match_inspected_mixamo_arm_lengths(offsets)
+    rest_positions = compute_rest_positions(
+        all_positions,
+        rest_start=args.rest_start,
+        rest_frames=args.rest_frames,
+    )
     output_prefix = args.mixamo_prefix if args.rig_preset == "mixamo" else ""
 
     write_bvh(
@@ -1312,6 +1458,7 @@ def main():
         output_prefix=output_prefix,
         prepend_tpose=args.prepend_tpose,
         tpose_frames=args.tpose_frames,
+        swap_left_right=args.swap_left_right_bones,
     )
 
     if args.dump_joint_map:

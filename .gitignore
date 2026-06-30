@@ -1,5 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Local input and generated output
 input/*
 !input/.gitkeep
-
 output/*
 !output/.gitkeep
+
+# Blender files and generated diagnostics
+*.blend
+*.blend1
+BlenderScript/*_report.txt
+BlenderScript/*_result.txt
+BlenderScript/debug/*_report.txt
+
+# Local screenshots and editor files
+スクリーンショット*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
